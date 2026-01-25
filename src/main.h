@@ -59,6 +59,8 @@ struct WindowInfo {
     Window window;
     char *name;
     int desktop;
+    int x, y;
+    int width, height;
     bool hidden;
     cairo_surface_t *icon;
     cairo_surface_t *thumbnail;
@@ -102,6 +104,11 @@ void thumbnail_free(cairo_surface_t *surface);
 /* icon.c */
 cairo_surface_t *icon_get(AppContext *ctx, Window win, int size);
 void icon_free(cairo_surface_t *surface);
+
+/* windows.c */
+WindowList *windows_list_create(void);
+void windows_list_free(WindowList *list);
+WindowList *windows_get_list(AppContext *ctx, Window overlay_window);
 
 /* util.c */
 void log_error(const char *fmt, ...);
