@@ -130,4 +130,6 @@ void log_error(const char *fmt, ...);
 void log_warning(const char *fmt, ...);
 void log_debug(const char *fmt, ...);
 
+/* layout.c - forward declaration of LayoutParams in layout.h */
+
 #endif /* ALTTAB_MAIN_H */
