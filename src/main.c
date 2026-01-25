@@ -25,7 +25,17 @@ int main(int argc, char *argv[])
     /* Initialize EWMH atoms */
     ewmh_init_atoms(&ctx);
 
+    /* Grab hotkey */
+    if (!hotkey_grab(&ctx)) {
+        log_error("Failed to grab hotkey");
+        XCloseDisplay(ctx.display);
+        return 1;
+    }
+
+    /* TODO: Event loop will go here */
+
     /* Clean shutdown */
+    hotkey_ungrab(&ctx);
     XCloseDisplay(ctx.display);
 
     return 0;
