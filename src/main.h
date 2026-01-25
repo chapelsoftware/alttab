@@ -79,6 +79,7 @@ Window *ewmh_get_client_list(AppContext *ctx, int *count);
 int ewmh_get_current_desktop(AppContext *ctx);
 int ewmh_get_window_desktop(AppContext *ctx, Window win);
 char *ewmh_get_window_name(AppContext *ctx, Window win);
+Atom ewmh_get_window_type(AppContext *ctx, Window win);
 bool ewmh_is_window_hidden(AppContext *ctx, Window win);
 void ewmh_activate_window(AppContext *ctx, Window win);
 
