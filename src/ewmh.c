@@ -243,3 +243,27 @@ void ewmh_activate_window(AppContext *ctx, Window win)
                SubstructureNotifyMask | SubstructureRedirectMask, &ev);
     XFlush(ctx->display);
 }
+
+/*
+ * Get the currently active window from _NET_ACTIVE_WINDOW property.
+ * Returns None if no window is active or on error.
+ */
+Window ewmh_get_active_window(AppContext *ctx)
+{
+    unsigned long nitems;
+    Window *data;
+
+    data = (Window *)ewmh_get_window_property(ctx, ctx->root,
+                                               ctx->atoms->net_active_window,
+                                               XA_WINDOW, &nitems);
+    if (data && nitems > 0) {
+        Window active = *data;
+        XFree(data);
+        return active;
+    }
+
+    if (data)
+        XFree(data);
+
+    return None;
+}

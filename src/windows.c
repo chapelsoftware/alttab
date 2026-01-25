@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "main.h"
+#include "windows.h"
 #include <X11/Xatom.h>
 
 /* Additional window type atoms for filtering */
@@ -280,4 +281,231 @@ WindowList *windows_get_list(AppContext *ctx, Window overlay_window)
 
     XFree(clients);
     return list;
+}
+
+/* ============================================================
+ * MRU (Most Recently Used) List Implementation
+ * ============================================================ */
+
+/*
+ * Hash function for window IDs.
+ * Simple modulo hashing - window IDs are typically sequential.
+ */
+static unsigned int mru_hash(Window win)
+{
+    return (unsigned int)(win % MRU_HASH_SIZE);
+}
+
+/*
+ * Find a node in the MRU list by window ID.
+ * Returns NULL if not found.
+ */
+static MRUNode *mru_find(MRUList *list, Window win)
+{
+    unsigned int hash = mru_hash(win);
+    MRUNode *node = list->hash_table[hash];
+
+    while (node) {
+        if (node->window == win)
+            return node;
+        node = node->hash_next;
+    }
+
+    return NULL;
+}
+
+/*
+ * Add a node to the hash table.
+ */
+static void mru_hash_add(MRUList *list, MRUNode *node)
+{
+    unsigned int hash = mru_hash(node->window);
+    node->hash_next = list->hash_table[hash];
+    list->hash_table[hash] = node;
+}
+
+/*
+ * Remove a node from the hash table.
+ */
+static void mru_hash_remove(MRUList *list, MRUNode *node)
+{
+    unsigned int hash = mru_hash(node->window);
+    MRUNode **pp = &list->hash_table[hash];
+
+    while (*pp) {
+        if (*pp == node) {
+            *pp = node->hash_next;
+            node->hash_next = NULL;
+            return;
+        }
+        pp = &(*pp)->hash_next;
+    }
+}
+
+/*
+ * Remove a node from the doubly-linked list (but not the hash table).
+ */
+static void mru_unlink(MRUList *list, MRUNode *node)
+{
+    if (node->prev)
+        node->prev->next = node->next;
+    else
+        list->head = node->next;
+
+    if (node->next)
+        node->next->prev = node->prev;
+    else
+        list->tail = node->prev;
+
+    node->prev = NULL;
+    node->next = NULL;
+}
+
+/*
+ * Insert a node at the front of the doubly-linked list.
+ */
+static void mru_insert_front(MRUList *list, MRUNode *node)
+{
+    node->prev = NULL;
+    node->next = list->head;
+
+    if (list->head)
+        list->head->prev = node;
+    else
+        list->tail = node;
+
+    list->head = node;
+}
+
+/*
+ * Initialize an empty MRU list.
+ */
+MRUList *mru_init(void)
+{
+    MRUList *list = calloc(1, sizeof(MRUList));
+    if (!list)
+        return NULL;
+
+    /* calloc zeros everything, so hash_table, head, tail, count are all 0/NULL */
+    return list;
+}
+
+/*
+ * Free all resources in the MRU list.
+ */
+void mru_free(MRUList *list)
+{
+    if (!list)
+        return;
+
+    MRUNode *node = list->head;
+    while (node) {
+        MRUNode *next = node->next;
+        free(node);
+        node = next;
+    }
+
+    free(list);
+}
+
+/*
+ * Touch a window - move it to the front of the MRU list (most recent).
+ * If the window is not in the list, add it.
+ */
+void mru_touch(MRUList *list, Window win)
+{
+    if (!list || win == None)
+        return;
+
+    MRUNode *node = mru_find(list, win);
+
+    if (node) {
+        /* Window exists - move to front if not already there */
+        if (node != list->head) {
+            mru_unlink(list, node);
+            mru_insert_front(list, node);
+        }
+    } else {
+        /* New window - create node and add to front */
+        node = calloc(1, sizeof(MRUNode));
+        if (!node)
+            return;
+
+        node->window = win;
+        mru_insert_front(list, node);
+        mru_hash_add(list, node);
+        list->count++;
+    }
+}
+
+/*
+ * Remove a window from the MRU list (e.g., when window is destroyed).
+ */
+void mru_remove(MRUList *list, Window win)
+{
+    if (!list || win == None)
+        return;
+
+    MRUNode *node = mru_find(list, win);
+    if (!node)
+        return;
+
+    mru_unlink(list, node);
+    mru_hash_remove(list, node);
+    list->count--;
+    free(node);
+}
+
+/*
+ * Get windows in MRU order (most recent first).
+ * Returns a newly allocated array of Window IDs.
+ * Caller must free the returned array.
+ * Sets *count to the number of windows.
+ */
+Window *mru_get_order(MRUList *list, int *count)
+{
+    *count = 0;
+
+    if (!list || list->count == 0)
+        return NULL;
+
+    Window *windows = malloc(sizeof(Window) * list->count);
+    if (!windows)
+        return NULL;
+
+    int i = 0;
+    MRUNode *node = list->head;
+    while (node && i < list->count) {
+        windows[i++] = node->window;
+        node = node->next;
+    }
+
+    *count = i;
+    return windows;
+}
+
+/*
+ * Initialize MRU list from the current stacking order.
+ * Uses _NET_CLIENT_LIST_STACKING which lists windows from bottom to top,
+ * so we iterate in reverse to get the topmost (most recently used) first.
+ */
+void mru_init_from_stacking(MRUList *list, AppContext *ctx)
+{
+    if (!list || !ctx)
+        return;
+
+    int client_count;
+    Window *clients = ewmh_get_client_list(ctx, &client_count);
+    if (!clients || client_count == 0) {
+        if (clients)
+            XFree(clients);
+        return;
+    }
+
+    /* Add windows in reverse stacking order (top to bottom = MRU to LRU) */
+    for (int i = client_count - 1; i >= 0; i--) {
+        mru_touch(list, clients[i]);
+    }
+
+    XFree(clients);
 }

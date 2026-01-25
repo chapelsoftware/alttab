@@ -24,6 +24,8 @@ typedef struct AppContext AppContext;
 typedef struct EwmhAtoms EwmhAtoms;
 typedef struct WindowInfo WindowInfo;
 typedef struct WindowList WindowList;
+typedef struct MRUNode MRUNode;
+typedef struct MRUList MRUList;
 
 /* Application context - global state */
 struct AppContext {
@@ -32,6 +34,7 @@ struct AppContext {
     int screen;
     EwmhAtoms *atoms;
     WindowList *windows;
+    MRUList *mru;           /* MRU tracking for window order */
     int selected_index;
     bool switcher_active;
 };
@@ -84,6 +87,7 @@ char *ewmh_get_window_name(AppContext *ctx, Window win);
 Atom ewmh_get_window_type(AppContext *ctx, Window win);
 bool ewmh_is_window_hidden(AppContext *ctx, Window win);
 void ewmh_activate_window(AppContext *ctx, Window win);
+Window ewmh_get_active_window(AppContext *ctx);
 
 /* hotkey.c */
 bool hotkey_grab(AppContext *ctx);
@@ -109,6 +113,14 @@ void icon_free(cairo_surface_t *surface);
 WindowList *windows_list_create(void);
 void windows_list_free(WindowList *list);
 WindowList *windows_get_list(AppContext *ctx, Window overlay_window);
+
+/* MRU list functions (defined in windows.h, but declared here for convenience) */
+MRUList *mru_init(void);
+void mru_free(MRUList *list);
+void mru_touch(MRUList *list, Window win);
+void mru_remove(MRUList *list, Window win);
+Window *mru_get_order(MRUList *list, int *count);
+void mru_init_from_stacking(MRUList *list, AppContext *ctx);
 
 /* util.c */
 void log_error(const char *fmt, ...);
