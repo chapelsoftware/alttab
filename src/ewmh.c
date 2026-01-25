@@ -21,6 +21,9 @@ void ewmh_init_atoms(AppContext *ctx)
     a->net_wm_icon = XInternAtom(ctx->display, "_NET_WM_ICON", False);
     a->net_wm_state = XInternAtom(ctx->display, "_NET_WM_STATE", False);
     a->net_wm_state_hidden = XInternAtom(ctx->display, "_NET_WM_STATE_HIDDEN", False);
+    a->net_wm_state_above = XInternAtom(ctx->display, "_NET_WM_STATE_ABOVE", False);
+    a->net_wm_state_skip_taskbar = XInternAtom(ctx->display, "_NET_WM_STATE_SKIP_TASKBAR", False);
+    a->net_wm_state_skip_pager = XInternAtom(ctx->display, "_NET_WM_STATE_SKIP_PAGER", False);
     a->net_wm_window_type = XInternAtom(ctx->display, "_NET_WM_WINDOW_TYPE", False);
     a->net_wm_window_type_normal = XInternAtom(ctx->display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
     a->net_wm_window_type_dialog = XInternAtom(ctx->display, "_NET_WM_WINDOW_TYPE_DIALOG", False);

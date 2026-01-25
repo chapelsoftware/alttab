@@ -49,6 +49,9 @@ struct EwmhAtoms {
     Atom net_wm_icon;
     Atom net_wm_state;
     Atom net_wm_state_hidden;
+    Atom net_wm_state_above;
+    Atom net_wm_state_skip_taskbar;
+    Atom net_wm_state_skip_pager;
     Atom net_wm_window_type;
     Atom net_wm_window_type_normal;
     Atom net_wm_window_type_dialog;
