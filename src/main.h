@@ -110,6 +110,9 @@ void overlay_flush(AppContext *ctx);
 void redraw_overlay(AppContext *ctx);
 
 /* thumbnail.c */
+bool thumbnail_init(AppContext *ctx);
+void thumbnail_cleanup(AppContext *ctx);
+bool thumbnail_available(AppContext *ctx);
 cairo_surface_t *thumbnail_capture(AppContext *ctx, Window win, int width, int height);
 void thumbnail_free(cairo_surface_t *surface);
 
