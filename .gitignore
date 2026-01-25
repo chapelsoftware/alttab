@@ -5,6 +5,7 @@ build/
 *.so
 *.dylib
 alttab
+tests/test_overlay
 
 
 # Editor/IDE
