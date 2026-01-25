@@ -4,6 +4,7 @@
  */
 
 #include "layout.h"
+#include "config.h"
 
 /*
  * Calculate layout parameters for given window count and screen dimensions.
@@ -27,9 +28,12 @@ void layout_calculate(LayoutParams *params, int window_count,
         return;
     }
 
-    /* Initialize with base values */
-    params->tile_width = LAYOUT_BASE_TILE_WIDTH;
-    params->tile_height = LAYOUT_BASE_TILE_HEIGHT;
+    /* Initialize with base values from config (or defaults if config not set) */
+    int base_tile_width = g_config.tile_width > 0 ? g_config.tile_width : LAYOUT_BASE_TILE_WIDTH;
+    int base_tile_height = g_config.tile_height > 0 ? g_config.tile_height : LAYOUT_BASE_TILE_HEIGHT;
+
+    params->tile_width = base_tile_width;
+    params->tile_height = base_tile_height;
     params->margin = LAYOUT_TILE_MARGIN;
     params->padding = LAYOUT_PADDING;
     params->scale = 1.0;
@@ -72,8 +76,8 @@ void layout_calculate(LayoutParams *params, int window_count,
         double scale = (double)content_max_height / grid_height;
 
         /* Apply scale to tile dimensions */
-        params->tile_width = (int)(LAYOUT_BASE_TILE_WIDTH * scale);
-        params->tile_height = (int)(LAYOUT_BASE_TILE_HEIGHT * scale);
+        params->tile_width = (int)(base_tile_width * scale);
+        params->tile_height = (int)(base_tile_height * scale);
         params->margin = (int)(LAYOUT_TILE_MARGIN * scale);
         params->scale = scale;
 
@@ -82,7 +86,7 @@ void layout_calculate(LayoutParams *params, int window_count,
             params->tile_width = 80;
             params->tile_height = 60;
             params->margin = 5;
-            params->scale = 80.0 / LAYOUT_BASE_TILE_WIDTH;
+            params->scale = 80.0 / base_tile_width;
         }
 
         /* Recalculate tiles per row with scaled dimensions */

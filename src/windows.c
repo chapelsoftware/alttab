@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "main.h"
+#include "config.h"
 #include "windows.h"
 #include "layout.h"
 #include "util.h"
@@ -281,8 +282,9 @@ WindowList *windows_get_list(AppContext *ctx, Window overlay_window)
     calculate_thumbnail_size(layout.tile_width, layout.tile_height,
                              &thumb_width, &thumb_height);
 
-    /* Initialize thumbnail subsystem */
-    bool thumbnails_available = thumbnail_init(ctx) && thumbnail_available(ctx);
+    /* Initialize thumbnail subsystem (unless disabled by config) */
+    bool thumbnails_available = !g_config.no_thumbnails &&
+                                thumbnail_init(ctx) && thumbnail_available(ctx);
 
     /* Iterate through clients in reverse (stacking order, top first) */
     for (int i = client_count - 1; i >= 0; i--) {

@@ -4,6 +4,7 @@
  */
 
 #include "main.h"
+#include "config.h"
 #include "overlay.h"
 #include "util.h"
 #include <X11/keysym.h>
@@ -325,23 +326,19 @@ int main(int argc, char *argv[])
     Window original_window = None;
     StackingOrder *saved_stacking = NULL;
 
-    /* Parse command line arguments */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            log_set_level(LOG_LEVEL_INFO);
-        } else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
-            log_set_level(LOG_LEVEL_DEBUG);
-        } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
-            log_set_level(LOG_LEVEL_ERROR);
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [options]\n", argv[0]);
-            printf("Options:\n");
-            printf("  -v, --verbose  Show info messages\n");
-            printf("  -d, --debug    Show debug messages\n");
-            printf("  -q, --quiet    Show only errors\n");
-            printf("  -h, --help     Show this help\n");
-            return 0;
-        }
+    /* Parse command line arguments using getopt_long */
+    int config_result = config_parse(argc, argv);
+    if (config_result == 1) {
+        /* --help or --version was shown */
+        return 0;
+    } else if (config_result < 0) {
+        /* Error parsing arguments */
+        return 1;
+    }
+
+    /* Set log level based on config */
+    if (g_config.verbose) {
+        log_set_level(LOG_LEVEL_DEBUG);
     }
 
     /* Install signal handlers for clean shutdown */

@@ -8,6 +8,7 @@
 #include <math.h>
 
 #include "main.h"
+#include "config.h"
 #include "overlay.h"
 #include "layout.h"
 #include "util.h"
@@ -205,11 +206,11 @@ bool overlay_create(AppContext *ctx)
         attrs.background_pixel = 0;      /* Transparent background */
         attr_mask |= CWBackPixel;
     } else {
-        /* Opaque mode: set a dark background color */
+        /* Opaque mode: set a dark background color from config */
         XColor bg_color;
-        bg_color.red = (unsigned short)(OVERLAY_BG_R * 65535);
-        bg_color.green = (unsigned short)(OVERLAY_BG_G * 65535);
-        bg_color.blue = (unsigned short)(OVERLAY_BG_B * 65535);
+        bg_color.red = (unsigned short)(g_config.bg_color.r * 65535);
+        bg_color.green = (unsigned short)(g_config.bg_color.g * 65535);
+        bg_color.blue = (unsigned short)(g_config.bg_color.b * 65535);
         bg_color.flags = DoRed | DoGreen | DoBlue;
 
         if (XAllocColor(ctx->display, state->colormap, &bg_color)) {
@@ -417,6 +418,9 @@ void overlay_clear(AppContext *ctx)
     if (!state->cr)
         return;
 
+    /* Use configured background color */
+    ColorRGBA bg = g_config.bg_color;
+
     if (overlay_has_transparency) {
         /* Clear to fully transparent first */
         cairo_save(state->cr);
@@ -426,14 +430,13 @@ void overlay_clear(AppContext *ctx)
         cairo_restore(state->cr);
 
         /* Draw semi-transparent background with rounded corners */
-        cairo_set_source_rgba(state->cr, OVERLAY_BG_R, OVERLAY_BG_G,
-                              OVERLAY_BG_B, OVERLAY_BG_A);
+        cairo_set_source_rgba(state->cr, bg.r, bg.g, bg.b, bg.a);
         draw_rounded_rect(state->cr, 0, 0, state->width, state->height,
                           TILE_CORNER_RADIUS * 2);
         cairo_fill(state->cr);
     } else {
         /* Opaque mode: fill entire background with solid dark color */
-        cairo_set_source_rgb(state->cr, OVERLAY_BG_R, OVERLAY_BG_G, OVERLAY_BG_B);
+        cairo_set_source_rgb(state->cr, bg.r, bg.g, bg.b);
         cairo_paint(state->cr);
 
         /* Draw subtle rounded rectangle border for visual separation */
@@ -563,8 +566,9 @@ void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
 
     /* Draw tile background */
     if (selected) {
-        cairo_set_source_rgba(state->cr, TILE_SELECTED_R, TILE_SELECTED_G,
-                              TILE_SELECTED_B, TILE_SELECTED_A);
+        /* Use configured highlight color */
+        ColorRGBA hl = g_config.highlight_color;
+        cairo_set_source_rgba(state->cr, hl.r, hl.g, hl.b, hl.a);
     } else {
         cairo_set_source_rgba(state->cr, TILE_BG_R, TILE_BG_G,
                               TILE_BG_B, TILE_BG_A);
@@ -574,8 +578,13 @@ void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
 
     /* Draw selection border if selected */
     if (selected) {
-        cairo_set_source_rgba(state->cr, TILE_BORDER_R, TILE_BORDER_G,
-                              TILE_BORDER_B, TILE_BORDER_A);
+        /* Use a brighter version of highlight color for border */
+        ColorRGBA hl = g_config.highlight_color;
+        cairo_set_source_rgba(state->cr,
+                              hl.r + (1.0 - hl.r) * 0.3,
+                              hl.g + (1.0 - hl.g) * 0.3,
+                              hl.b + (1.0 - hl.b) * 0.3,
+                              1.0);
         cairo_set_line_width(state->cr, TILE_BORDER_WIDTH);
         draw_rounded_rect(state->cr, dx + TILE_BORDER_WIDTH / 2,
                           dy + TILE_BORDER_WIDTH / 2,
