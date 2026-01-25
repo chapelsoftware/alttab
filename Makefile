@@ -6,7 +6,7 @@ CFLAGS = -Wall -Wextra -std=c11 -g
 LDFLAGS =
 
 # pkg-config dependencies
-PKG_DEPS = x11 xcomposite xrender cairo
+PKG_DEPS = x11 xcomposite xrender cairo xinerama
 
 CFLAGS += $(shell pkg-config --cflags $(PKG_DEPS))
 LDFLAGS += $(shell pkg-config --libs $(PKG_DEPS))

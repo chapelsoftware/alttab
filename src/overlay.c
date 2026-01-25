@@ -12,6 +12,7 @@
 #include "overlay.h"
 #include "layout.h"
 #include "util.h"
+#include <X11/extensions/Xinerama.h>
 
 /* Default overlay dimensions */
 #define OVERLAY_WIDTH  600
@@ -56,6 +57,70 @@ static OverlayState overlay_state;
 
 /* Track whether we have true transparency (ARGB visual with compositor) */
 static bool overlay_has_transparency = false;
+
+/* Active monitor geometry */
+static int monitor_x = 0;
+static int monitor_y = 0;
+static int monitor_width = 0;
+static int monitor_height = 0;
+
+/*
+ * Get the geometry of the monitor containing the mouse pointer.
+ * Falls back to full screen if Xinerama is not available.
+ */
+static void get_active_monitor_geometry(AppContext *ctx)
+{
+    /* Default to full screen */
+    monitor_x = 0;
+    monitor_y = 0;
+    monitor_width = DisplayWidth(ctx->display, ctx->screen);
+    monitor_height = DisplayHeight(ctx->display, ctx->screen);
+
+    /* Check if Xinerama is available */
+    int event_base, error_base;
+    if (!XineramaQueryExtension(ctx->display, &event_base, &error_base)) {
+        log_debug("Xinerama not available, using full screen");
+        return;
+    }
+
+    if (!XineramaIsActive(ctx->display)) {
+        log_debug("Xinerama not active, using full screen");
+        return;
+    }
+
+    /* Get monitor info */
+    int num_monitors;
+    XineramaScreenInfo *monitors = XineramaQueryScreens(ctx->display, &num_monitors);
+    if (!monitors || num_monitors == 0) {
+        log_debug("No Xinerama screens found, using full screen");
+        return;
+    }
+
+    /* Get mouse pointer position to determine active monitor */
+    Window root_return, child_return;
+    int root_x, root_y, win_x, win_y;
+    unsigned int mask_return;
+
+    if (XQueryPointer(ctx->display, ctx->root, &root_return, &child_return,
+                      &root_x, &root_y, &win_x, &win_y, &mask_return)) {
+        /* Find which monitor contains the pointer */
+        for (int i = 0; i < num_monitors; i++) {
+            XineramaScreenInfo *m = &monitors[i];
+            if (root_x >= m->x_org && root_x < m->x_org + m->width &&
+                root_y >= m->y_org && root_y < m->y_org + m->height) {
+                monitor_x = m->x_org;
+                monitor_y = m->y_org;
+                monitor_width = m->width;
+                monitor_height = m->height;
+                log_debug("Active monitor %d: %dx%d+%d+%d",
+                          i, monitor_width, monitor_height, monitor_x, monitor_y);
+                break;
+            }
+        }
+    }
+
+    XFree(monitors);
+}
 
 OverlayState *overlay_get_state(void)
 {
@@ -184,15 +249,14 @@ bool overlay_create(AppContext *ctx)
         overlay_has_transparency = false;
     }
 
-    /* Get screen dimensions for centering */
-    int screen_width = DisplayWidth(ctx->display, ctx->screen);
-    int screen_height = DisplayHeight(ctx->display, ctx->screen);
+    /* Get active monitor geometry for centering */
+    get_active_monitor_geometry(ctx);
 
     state->width = OVERLAY_WIDTH;
     state->height = OVERLAY_HEIGHT;
 
-    int x = (screen_width - state->width) / 2;
-    int y = (screen_height - state->height) / 2;
+    int x = monitor_x + (monitor_width - state->width) / 2;
+    int y = monitor_y + (monitor_height - state->height) / 2;
 
     /* Window attributes - override-redirect for popup behavior */
     XSetWindowAttributes attrs;
@@ -315,10 +379,14 @@ void overlay_show(AppContext *ctx)
         return;
 
     if (!state->visible) {
+        /* Update active monitor geometry before showing */
+        get_active_monitor_geometry(ctx);
+
         XMapRaised(ctx->display, state->window);
         state->visible = true;
         XFlush(ctx->display);
-        log_debug("Overlay shown");
+        log_debug("Overlay shown on monitor at %d,%d (%dx%d)",
+                  monitor_x, monitor_y, monitor_width, monitor_height);
     }
 }
 
@@ -684,11 +752,9 @@ void redraw_overlay(AppContext *ctx)
         return;
     }
 
-    /* Calculate layout */
+    /* Calculate layout using active monitor dimensions */
     LayoutParams layout;
-    int screen_width = DisplayWidth(ctx->display, ctx->screen);
-    int screen_height = DisplayHeight(ctx->display, ctx->screen);
-    layout_calculate(&layout, ctx->windows->count, screen_width, screen_height);
+    layout_calculate(&layout, ctx->windows->count, monitor_width, monitor_height);
 
     /* Resize overlay if needed */
     if (state->width != layout.overlay_width ||
@@ -696,9 +762,10 @@ void redraw_overlay(AppContext *ctx)
         state->width = layout.overlay_width;
         state->height = layout.overlay_height;
 
-        /* Move and resize window */
+        /* Move and resize window - position relative to active monitor */
         XMoveResizeWindow(ctx->display, state->window,
-                          layout.overlay_x, layout.overlay_y,
+                          monitor_x + layout.overlay_x,
+                          monitor_y + layout.overlay_y,
                           layout.overlay_width, layout.overlay_height);
 
         /* Resize Cairo surface */

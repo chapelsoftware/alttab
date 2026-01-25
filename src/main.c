@@ -31,7 +31,6 @@ static void stop_switching(AppContext *ctx, bool confirm, Window original_window
                            StackingOrder **saved_stacking);
 static void select_next(AppContext *ctx);
 static void select_previous(AppContext *ctx);
-static void raise_current_selection(AppContext *ctx);
 static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
                             Window *original_window, StackingOrder **saved_stacking);
 static bool validate_window_exists(AppContext *ctx, Window win);
@@ -165,9 +164,6 @@ static void start_switching(AppContext *ctx, Window *original_window,
     /* Show and draw the overlay */
     overlay_show(ctx);
     redraw_overlay(ctx);
-
-    /* Raise the initially selected window for preview */
-    raise_current_selection(ctx);
 }
 
 /*
@@ -215,23 +211,6 @@ static void stop_switching(AppContext *ctx, bool confirm, Window original_window
 }
 
 /*
- * Raise the currently selected window for preview.
- * This makes the selected window visible behind the overlay.
- */
-static void raise_current_selection(AppContext *ctx)
-{
-    if (!ctx->windows || ctx->windows->count == 0)
-        return;
-
-    if (ctx->selected_index < 0 || ctx->selected_index >= ctx->windows->count)
-        return;
-
-    OverlayState *overlay = overlay_get_state();
-    Window selected_win = ctx->windows->windows[ctx->selected_index].window;
-    raise_preview_window(ctx, selected_win, overlay->window);
-}
-
-/*
  * Select the next window in the list (wrap around).
  */
 static void select_next(AppContext *ctx)
@@ -241,7 +220,6 @@ static void select_next(AppContext *ctx)
 
     ctx->selected_index = (ctx->selected_index + 1) % ctx->windows->count;
     redraw_overlay(ctx);
-    raise_current_selection(ctx);
     log_debug("Selected next: index %d", ctx->selected_index);
 }
 
@@ -257,7 +235,6 @@ static void select_previous(AppContext *ctx)
     if (ctx->selected_index < 0)
         ctx->selected_index = ctx->windows->count - 1;
     redraw_overlay(ctx);
-    raise_current_selection(ctx);
     log_debug("Selected previous: index %d", ctx->selected_index);
 }
 
@@ -281,7 +258,6 @@ static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
                 /* Start at index 1, go back to last */
                 ctx->selected_index = ctx->windows->count - 1;
                 redraw_overlay(ctx);
-                raise_current_selection(ctx);
             }
         }
     } else {
@@ -432,7 +408,6 @@ int main(int argc, char *argv[])
                             state = STATE_IDLE;
                         } else {
                             redraw_overlay(&ctx);
-                            raise_current_selection(&ctx);
                         }
                     }
                     break;
@@ -450,7 +425,6 @@ int main(int argc, char *argv[])
                                 state = STATE_IDLE;
                             } else {
                                 redraw_overlay(&ctx);
-                                raise_current_selection(&ctx);
                             }
                         }
                     }
