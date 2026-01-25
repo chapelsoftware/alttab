@@ -29,7 +29,8 @@ void overlay_clear(AppContext *ctx);
 
 /* Draw a single tile at the specified position */
 void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
-                       const char *title, bool selected, cairo_surface_t *icon);
+                       const char *title, bool selected, cairo_surface_t *icon,
+                       cairo_surface_t *thumbnail, bool is_minimized);
 
 /* Flush Cairo surface and X display */
 void overlay_flush(AppContext *ctx);

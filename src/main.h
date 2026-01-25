@@ -105,7 +105,8 @@ void overlay_hide(AppContext *ctx);
 void overlay_draw(AppContext *ctx);
 void overlay_clear(AppContext *ctx);
 void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
-                       const char *title, bool selected, cairo_surface_t *icon);
+                       const char *title, bool selected, cairo_surface_t *icon,
+                       cairo_surface_t *thumbnail, bool is_minimized);
 void overlay_flush(AppContext *ctx);
 void redraw_overlay(AppContext *ctx);
 

@@ -7,7 +7,15 @@
 
 #include "main.h"
 #include "windows.h"
+#include "layout.h"
 #include <X11/Xatom.h>
+
+/* Thumbnail capture parameters - must match overlay.c constants */
+#define THUMB_ICON_SIZE        32
+#define THUMB_ICON_PADDING     6
+#define THUMB_TEXT_HEIGHT      24
+#define THUMB_TEXT_PADDING     4
+#define THUMB_TILE_PADDING     8    /* Internal padding for thumbnail area */
 
 /* Additional window type atoms for filtering */
 static Atom atom_wm_type_dock;
@@ -207,6 +215,31 @@ static bool windows_list_add(WindowList *list, WindowInfo *info)
 }
 
 /*
+ * Calculate thumbnail dimensions for a given tile size.
+ * Thumbnails are displayed in the upper area of the tile, leaving room for
+ * the icon (bottom-left) and title (bottom center).
+ */
+static void calculate_thumbnail_size(int tile_width, int tile_height,
+                                      int *thumb_width, int *thumb_height)
+{
+    /* Available height = tile height minus text area, icon area, and padding */
+    int available_height = tile_height - THUMB_TEXT_HEIGHT - THUMB_TEXT_PADDING
+                           - THUMB_TILE_PADDING * 2;
+
+    /* Available width = tile width minus padding on both sides */
+    int available_width = tile_width - THUMB_TILE_PADDING * 2;
+
+    /* Ensure minimum dimensions */
+    if (available_width < 40)
+        available_width = 40;
+    if (available_height < 30)
+        available_height = 30;
+
+    *thumb_width = available_width;
+    *thumb_height = available_height;
+}
+
+/*
  * Get list of windows on the current desktop.
  * Filters out docks, panels, toolbars, and other non-switchable windows.
  * The overlay_window parameter allows filtering out our own overlay.
@@ -232,6 +265,19 @@ WindowList *windows_get_list(AppContext *ctx, Window overlay_window)
             XFree(clients);
         return list;  /* Return empty list */
     }
+
+    /* Calculate layout to determine thumbnail size */
+    int screen_width = DisplayWidth(ctx->display, ctx->screen);
+    int screen_height = DisplayHeight(ctx->display, ctx->screen);
+    LayoutParams layout;
+    layout_calculate(&layout, client_count, screen_width, screen_height);
+
+    int thumb_width, thumb_height;
+    calculate_thumbnail_size(layout.tile_width, layout.tile_height,
+                             &thumb_width, &thumb_height);
+
+    /* Initialize thumbnail subsystem */
+    bool thumbnails_available = thumbnail_init(ctx) && thumbnail_available(ctx);
 
     /* Iterate through clients in reverse (stacking order, top first) */
     for (int i = client_count - 1; i >= 0; i--) {
@@ -269,14 +315,25 @@ WindowList *windows_get_list(AppContext *ctx, Window overlay_window)
         /* Fetch icon for this window (32px is our target size) */
         info.icon = icon_get(ctx, win, 32);
 
-        /* Thumbnail is set to NULL, to be loaded lazily */
+        /* Capture thumbnail if available and window is not minimized */
         info.thumbnail = NULL;
+        if (thumbnails_available && !info.hidden) {
+            info.thumbnail = thumbnail_capture(ctx, win, thumb_width, thumb_height);
+            if (info.thumbnail) {
+                log_debug("Captured thumbnail for window 0x%lx (%dx%d)",
+                          win, thumb_width, thumb_height);
+            }
+        }
 
         /* Add to list */
         if (!windows_list_add(list, &info)) {
-            /* Failed to add - free name and continue */
+            /* Failed to add - free resources and continue */
             if (info.name)
                 free(info.name);
+            if (info.icon)
+                cairo_surface_destroy(info.icon);
+            if (info.thumbnail)
+                cairo_surface_destroy(info.thumbnail);
             continue;
         }
     }

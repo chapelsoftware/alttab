@@ -371,11 +371,106 @@ void overlay_clear(AppContext *ctx)
 #define TILE_ICON_SIZE        32    /* Target icon size in pixels */
 #define TILE_ICON_PADDING     6     /* Padding from tile edge */
 
+/* Thumbnail rendering constants */
+#define THUMB_TILE_PADDING    8     /* Internal padding for thumbnail area */
+#define THUMB_SHADOW_OFFSET   2     /* Shadow offset in pixels */
+#define THUMB_BORDER_WIDTH    1.0   /* Subtle border width */
+
+/* Minimized window placeholder colors */
+#define MINIMIZED_BG_R        0.15
+#define MINIMIZED_BG_G        0.15
+#define MINIMIZED_BG_B        0.15
+#define MINIMIZED_BG_A        0.6
+
+/*
+ * Draw a thumbnail or placeholder for minimized windows.
+ * The thumbnail area is in the upper portion of the tile.
+ */
+static void draw_thumbnail_area(cairo_t *cr, double dx, double dy, double dw, double dh,
+                                 cairo_surface_t *thumbnail, bool is_minimized)
+{
+    /* Calculate thumbnail area - upper portion of tile, leaving room for icon/title */
+    double thumb_area_y = dy + THUMB_TILE_PADDING;
+    double thumb_area_height = dh - TILE_TEXT_HEIGHT - TILE_TEXT_PADDING
+                                - THUMB_TILE_PADDING * 2;
+    double thumb_area_width = dw - THUMB_TILE_PADDING * 2;
+    double thumb_area_x = dx + THUMB_TILE_PADDING;
+
+    /* Ensure minimum dimensions */
+    if (thumb_area_width < 40 || thumb_area_height < 30)
+        return;
+
+    if (thumbnail && cairo_surface_status(thumbnail) == CAIRO_STATUS_SUCCESS) {
+        /* Get actual thumbnail dimensions */
+        int thumb_width = cairo_image_surface_get_width(thumbnail);
+        int thumb_height = cairo_image_surface_get_height(thumbnail);
+
+        /* Center the thumbnail in the available area */
+        double thumb_x = thumb_area_x + (thumb_area_width - thumb_width) / 2.0;
+        double thumb_y = thumb_area_y + (thumb_area_height - thumb_height) / 2.0;
+
+        /* Draw subtle shadow behind thumbnail */
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.3);
+        cairo_rectangle(cr, thumb_x + THUMB_SHADOW_OFFSET,
+                        thumb_y + THUMB_SHADOW_OFFSET,
+                        thumb_width, thumb_height);
+        cairo_fill(cr);
+        cairo_restore(cr);
+
+        /* Draw the thumbnail */
+        cairo_save(cr);
+        cairo_set_source_surface(cr, thumbnail, thumb_x, thumb_y);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+        cairo_paint(cr);
+        cairo_restore(cr);
+
+        /* Draw subtle border around thumbnail */
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.5);
+        cairo_set_line_width(cr, THUMB_BORDER_WIDTH);
+        cairo_rectangle(cr, thumb_x, thumb_y, thumb_width, thumb_height);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    } else if (is_minimized) {
+        /* Draw placeholder for minimized windows */
+        cairo_save(cr);
+
+        /* Dark placeholder background */
+        cairo_set_source_rgba(cr, MINIMIZED_BG_R, MINIMIZED_BG_G,
+                              MINIMIZED_BG_B, MINIMIZED_BG_A);
+        cairo_rectangle(cr, thumb_area_x, thumb_area_y,
+                        thumb_area_width, thumb_area_height);
+        cairo_fill(cr);
+
+        /* Draw "Minimized" text indicator */
+        cairo_select_font_face(cr, TILE_FONT_FAMILY,
+                               CAIRO_FONT_SLANT_ITALIC,
+                               CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, TILE_FONT_SIZE * 0.9);
+
+        const char *label = "Minimized";
+        cairo_text_extents_t extents;
+        cairo_text_extents(cr, label, &extents);
+
+        double label_x = thumb_area_x + (thumb_area_width - extents.width) / 2.0
+                         - extents.x_bearing;
+        double label_y = thumb_area_y + (thumb_area_height + extents.height) / 2.0;
+
+        cairo_set_source_rgba(cr, 0.6, 0.6, 0.6, 0.8);
+        cairo_move_to(cr, label_x, label_y);
+        cairo_show_text(cr, label);
+
+        cairo_restore(cr);
+    }
+}
+
 /*
  * Draw a single tile at the specified position.
  */
 void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
-                       const char *title, bool selected, cairo_surface_t *icon)
+                       const char *title, bool selected, cairo_surface_t *icon,
+                       cairo_surface_t *thumbnail, bool is_minimized)
 {
     OverlayState *state = &overlay_state;
     (void)ctx;
@@ -411,6 +506,9 @@ void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
                           TILE_CORNER_RADIUS);
         cairo_stroke(state->cr);
     }
+
+    /* Draw thumbnail or placeholder in upper area of tile */
+    draw_thumbnail_area(state->cr, dx, dy, dw, dh, thumbnail, is_minimized);
 
     /* Draw icon in bottom-left corner if available */
     if (icon && cairo_surface_status(icon) == CAIRO_STATUS_SUCCESS) {
@@ -536,9 +634,12 @@ void redraw_overlay(AppContext *ctx)
             title = "Unknown";
 
         cairo_surface_t *icon = ctx->windows->windows[i].icon;
+        cairo_surface_t *thumbnail = ctx->windows->windows[i].thumbnail;
+        bool is_minimized = ctx->windows->windows[i].hidden;
+
         overlay_draw_tile(ctx, tile_x, tile_y,
                           layout.tile_width, layout.tile_height,
-                          title, selected, icon);
+                          title, selected, icon, thumbnail, is_minimized);
     }
 
     /* Flush to display */
