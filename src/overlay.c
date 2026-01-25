@@ -367,11 +367,15 @@ void overlay_clear(AppContext *ctx)
     cairo_fill(state->cr);
 }
 
+/* Icon rendering constants */
+#define TILE_ICON_SIZE        32    /* Target icon size in pixels */
+#define TILE_ICON_PADDING     6     /* Padding from tile edge */
+
 /*
  * Draw a single tile at the specified position.
  */
 void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
-                       const char *title, bool selected)
+                       const char *title, bool selected, cairo_surface_t *icon)
 {
     OverlayState *state = &overlay_state;
     (void)ctx;
@@ -406,6 +410,27 @@ void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
                           dh - TILE_BORDER_WIDTH,
                           TILE_CORNER_RADIUS);
         cairo_stroke(state->cr);
+    }
+
+    /* Draw icon in bottom-left corner if available */
+    if (icon && cairo_surface_status(icon) == CAIRO_STATUS_SUCCESS) {
+        int icon_height = cairo_image_surface_get_height(icon);
+
+        /* Position icon at bottom-left with padding, above the text area */
+        double icon_x = dx + TILE_ICON_PADDING;
+        double icon_y = dy + dh - TILE_TEXT_HEIGHT - TILE_ICON_PADDING - icon_height;
+
+        /* Ensure icon stays within tile bounds */
+        if (icon_y < dy + TILE_ICON_PADDING) {
+            icon_y = dy + TILE_ICON_PADDING;
+        }
+
+        /* Draw the icon with Cairo scaling for smooth rendering */
+        cairo_save(state->cr);
+        cairo_set_source_surface(state->cr, icon, icon_x, icon_y);
+        cairo_pattern_set_filter(cairo_get_source(state->cr), CAIRO_FILTER_BILINEAR);
+        cairo_paint(state->cr);
+        cairo_restore(state->cr);
     }
 
     /* Draw window title at bottom of tile */
@@ -510,9 +535,10 @@ void redraw_overlay(AppContext *ctx)
         if (!title)
             title = "Unknown";
 
+        cairo_surface_t *icon = ctx->windows->windows[i].icon;
         overlay_draw_tile(ctx, tile_x, tile_y,
                           layout.tile_width, layout.tile_height,
-                          title, selected);
+                          title, selected, icon);
     }
 
     /* Flush to display */

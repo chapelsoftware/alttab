@@ -266,8 +266,10 @@ WindowList *windows_get_list(AppContext *ctx, Window overlay_window)
         /* Check if window is minimized/hidden */
         info.hidden = ewmh_is_window_hidden(ctx, win);
 
-        /* Icon and thumbnail are set to NULL, to be loaded lazily */
-        info.icon = NULL;
+        /* Fetch icon for this window (32px is our target size) */
+        info.icon = icon_get(ctx, win, 32);
+
+        /* Thumbnail is set to NULL, to be loaded lazily */
         info.thumbnail = NULL;
 
         /* Add to list */
