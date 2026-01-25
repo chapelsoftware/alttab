@@ -568,3 +568,114 @@ void mru_init_from_stacking(MRUList *list, AppContext *ctx)
 
     XFree(clients);
 }
+
+/* ============================================================
+ * Window Stacking Order Save/Restore
+ * ============================================================ */
+
+/*
+ * Save the current window stacking order.
+ * Uses _NET_CLIENT_LIST_STACKING which gives windows from bottom to top.
+ * Returns a StackingOrder struct that must be freed with stacking_free().
+ */
+StackingOrder *stacking_save(AppContext *ctx)
+{
+    if (!ctx)
+        return NULL;
+
+    StackingOrder *order = malloc(sizeof(StackingOrder));
+    if (!order)
+        return NULL;
+
+    order->windows = NULL;
+    order->count = 0;
+
+    int client_count;
+    Window *clients = ewmh_get_client_list(ctx, &client_count);
+    if (!clients || client_count == 0) {
+        if (clients)
+            XFree(clients);
+        return order;
+    }
+
+    /* Allocate and copy the window list */
+    order->windows = malloc(sizeof(Window) * client_count);
+    if (!order->windows) {
+        XFree(clients);
+        free(order);
+        return NULL;
+    }
+
+    memcpy(order->windows, clients, sizeof(Window) * client_count);
+    order->count = client_count;
+
+    XFree(clients);
+    log_debug("Saved stacking order: %d windows", order->count);
+
+    return order;
+}
+
+/*
+ * Restore a previously saved stacking order.
+ * Re-stacks windows from bottom to top using XRestackWindows.
+ */
+void stacking_restore(AppContext *ctx, StackingOrder *order)
+{
+    if (!ctx || !order || !order->windows || order->count == 0)
+        return;
+
+    /*
+     * XRestackWindows expects windows in top-to-bottom order,
+     * but our saved order is bottom-to-top. Reverse it.
+     */
+    Window *reversed = malloc(sizeof(Window) * order->count);
+    if (!reversed)
+        return;
+
+    for (int i = 0; i < order->count; i++) {
+        reversed[i] = order->windows[order->count - 1 - i];
+    }
+
+    /* Restack all windows */
+    XRestackWindows(ctx->display, reversed, order->count);
+    XFlush(ctx->display);
+
+    free(reversed);
+    log_debug("Restored stacking order: %d windows", order->count);
+}
+
+/*
+ * Free a StackingOrder struct.
+ */
+void stacking_free(StackingOrder *order)
+{
+    if (!order)
+        return;
+
+    if (order->windows)
+        free(order->windows);
+
+    free(order);
+}
+
+/*
+ * Raise a window for preview, keeping the overlay above it.
+ * This temporarily brings the selected window to the top of the stack,
+ * then re-raises the overlay to stay above it.
+ */
+void raise_preview_window(AppContext *ctx, Window win, Window overlay_window)
+{
+    if (!ctx || win == None)
+        return;
+
+    /* Raise the selected window */
+    XRaiseWindow(ctx->display, win);
+
+    /* Re-raise the overlay window to keep it on top */
+    if (overlay_window != None) {
+        XRaiseWindow(ctx->display, overlay_window);
+    }
+
+    XFlush(ctx->display);
+    log_debug("Raised preview window 0x%lx", win);
+}

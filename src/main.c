@@ -19,23 +19,34 @@ typedef enum {
 #define ALT_POLL_INTERVAL_MS 10
 
 /* Forward declarations */
-static void start_switching(AppContext *ctx, Window *original_window);
-static void stop_switching(AppContext *ctx, bool confirm, Window original_window);
+static void start_switching(AppContext *ctx, Window *original_window,
+                            StackingOrder **saved_stacking);
+static void stop_switching(AppContext *ctx, bool confirm, Window original_window,
+                           StackingOrder **saved_stacking);
 static void select_next(AppContext *ctx);
 static void select_previous(AppContext *ctx);
+static void raise_current_selection(AppContext *ctx);
 static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
-                            Window *original_window);
+                            Window *original_window, StackingOrder **saved_stacking);
 
 /*
  * Start the window switching mode.
  * Captures the currently active window, builds the window list, and shows overlay.
+ * Saves the original stacking order for potential cancel/restore.
  */
-static void start_switching(AppContext *ctx, Window *original_window)
+static void start_switching(AppContext *ctx, Window *original_window,
+                            StackingOrder **saved_stacking)
 {
     OverlayState *overlay = overlay_get_state();
 
     /* Remember the currently active window for potential cancel */
     *original_window = ewmh_get_active_window(ctx);
+
+    /* Save the current stacking order before we start modifying it */
+    if (*saved_stacking) {
+        stacking_free(*saved_stacking);
+    }
+    *saved_stacking = stacking_save(ctx);
 
     /* Get the list of windows, excluding our overlay */
     if (ctx->windows) {
@@ -56,14 +67,18 @@ static void start_switching(AppContext *ctx, Window *original_window)
     /* Show and draw the overlay */
     overlay_show(ctx);
     redraw_overlay(ctx);
+
+    /* Raise the initially selected window for preview */
+    raise_current_selection(ctx);
 }
 
 /*
  * Stop the window switching mode.
  * If confirm is true, activate the selected window.
- * If confirm is false, restore the original window.
+ * If confirm is false, restore the original window and stacking order.
  */
-static void stop_switching(AppContext *ctx, bool confirm, Window original_window)
+static void stop_switching(AppContext *ctx, bool confirm, Window original_window,
+                           StackingOrder **saved_stacking)
 {
     ctx->switcher_active = false;
 
@@ -76,10 +91,22 @@ static void stop_switching(AppContext *ctx, bool confirm, Window original_window
         Window selected = ctx->windows->windows[ctx->selected_index].window;
         ewmh_activate_window(ctx, selected);
         log_debug("Activated window 0x%lx", selected);
-    } else if (!confirm && original_window != None) {
-        /* Cancel - restore original window */
-        ewmh_activate_window(ctx, original_window);
-        log_debug("Restored original window 0x%lx", original_window);
+    } else if (!confirm) {
+        /* Cancel - restore original stacking order first */
+        if (*saved_stacking) {
+            stacking_restore(ctx, *saved_stacking);
+        }
+        /* Then restore original window focus */
+        if (original_window != None) {
+            ewmh_activate_window(ctx, original_window);
+            log_debug("Restored original window 0x%lx", original_window);
+        }
+    }
+
+    /* Free saved stacking order */
+    if (*saved_stacking) {
+        stacking_free(*saved_stacking);
+        *saved_stacking = NULL;
     }
 
     /* Free window list */
@@ -87,6 +114,23 @@ static void stop_switching(AppContext *ctx, bool confirm, Window original_window
         windows_list_free(ctx->windows);
         ctx->windows = NULL;
     }
+}
+
+/*
+ * Raise the currently selected window for preview.
+ * This makes the selected window visible behind the overlay.
+ */
+static void raise_current_selection(AppContext *ctx)
+{
+    if (!ctx->windows || ctx->windows->count == 0)
+        return;
+
+    if (ctx->selected_index < 0 || ctx->selected_index >= ctx->windows->count)
+        return;
+
+    OverlayState *overlay = overlay_get_state();
+    Window selected_win = ctx->windows->windows[ctx->selected_index].window;
+    raise_preview_window(ctx, selected_win, overlay->window);
 }
 
 /*
@@ -99,6 +143,7 @@ static void select_next(AppContext *ctx)
 
     ctx->selected_index = (ctx->selected_index + 1) % ctx->windows->count;
     redraw_overlay(ctx);
+    raise_current_selection(ctx);
     log_debug("Selected next: index %d", ctx->selected_index);
 }
 
@@ -114,6 +159,7 @@ static void select_previous(AppContext *ctx)
     if (ctx->selected_index < 0)
         ctx->selected_index = ctx->windows->count - 1;
     redraw_overlay(ctx);
+    raise_current_selection(ctx);
     log_debug("Selected previous: index %d", ctx->selected_index);
 }
 
@@ -121,7 +167,7 @@ static void select_previous(AppContext *ctx)
  * Handle a KeyPress event.
  */
 static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
-                            Window *original_window)
+                            Window *original_window, StackingOrder **saved_stacking)
 {
     KeySym keysym = XLookupKeysym(ev, 0);
     bool shift_pressed = (ev->state & ShiftMask) != 0;
@@ -130,13 +176,14 @@ static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
         /* In idle state, Alt+Tab starts switching */
         if (keysym == XK_Tab || keysym == XK_ISO_Left_Tab) {
             *state = STATE_SWITCHING;
-            start_switching(ctx, original_window);
+            start_switching(ctx, original_window, saved_stacking);
 
             /* If Shift is held, go to previous (which wraps to last) */
             if (shift_pressed && ctx->windows && ctx->windows->count > 1) {
                 /* Start at index 1, go back to last */
                 ctx->selected_index = ctx->windows->count - 1;
                 redraw_overlay(ctx);
+                raise_current_selection(ctx);
             }
         }
     } else {
@@ -156,15 +203,15 @@ static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
             break;
 
         case XK_Escape:
-            /* Cancel and restore original window */
-            stop_switching(ctx, false, *original_window);
+            /* Cancel and restore original window and stacking order */
+            stop_switching(ctx, false, *original_window, saved_stacking);
             *state = STATE_IDLE;
             break;
 
         case XK_Return:
         case XK_KP_Enter:
             /* Confirm selection */
-            stop_switching(ctx, true, *original_window);
+            stop_switching(ctx, true, *original_window, saved_stacking);
             *state = STATE_IDLE;
             break;
 
@@ -182,6 +229,7 @@ int main(int argc, char *argv[])
     AppContext ctx = {0};
     AppState state = STATE_IDLE;
     Window original_window = None;
+    StackingOrder *saved_stacking = NULL;
     bool running = true;
 
     /* Open X display */
@@ -237,7 +285,8 @@ int main(int argc, char *argv[])
 
                 switch (ev.type) {
                 case KeyPress:
-                    handle_keypress(&ctx, &ev.xkey, &state, &original_window);
+                    handle_keypress(&ctx, &ev.xkey, &state, &original_window,
+                                    &saved_stacking);
                     break;
 
                 case Expose:
@@ -267,7 +316,7 @@ int main(int argc, char *argv[])
             /* Check if Alt was released */
             if (hotkey_alt_released(&ctx)) {
                 log_debug("Alt released - confirming selection");
-                stop_switching(&ctx, true, original_window);
+                stop_switching(&ctx, true, original_window, &saved_stacking);
                 state = STATE_IDLE;
             }
         } else {
@@ -277,7 +326,8 @@ int main(int argc, char *argv[])
 
             switch (ev.type) {
             case KeyPress:
-                handle_keypress(&ctx, &ev.xkey, &state, &original_window);
+                handle_keypress(&ctx, &ev.xkey, &state, &original_window,
+                                &saved_stacking);
                 break;
 
             case PropertyNotify:
@@ -291,6 +341,10 @@ int main(int argc, char *argv[])
     }
 
     /* Clean shutdown */
+    if (saved_stacking) {
+        stacking_free(saved_stacking);
+        saved_stacking = NULL;
+    }
     if (ctx.windows) {
         windows_list_free(ctx.windows);
         ctx.windows = NULL;

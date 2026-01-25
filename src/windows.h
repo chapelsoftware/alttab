@@ -41,4 +41,22 @@ void mru_remove(MRUList *list, Window win);
 Window *mru_get_order(MRUList *list, int *count);
 void mru_init_from_stacking(MRUList *list, AppContext *ctx);
 
+/* ============================================================
+ * Window Stacking Order Save/Restore
+ * ============================================================ */
+
+/* Saved stacking order for cancel/restore functionality */
+typedef struct StackingOrder {
+    Window *windows;        /* Array of window IDs in stacking order (bottom to top) */
+    int count;              /* Number of windows */
+} StackingOrder;
+
+/* Stacking order functions */
+StackingOrder *stacking_save(AppContext *ctx);
+void stacking_restore(AppContext *ctx, StackingOrder *order);
+void stacking_free(StackingOrder *order);
+
+/* Preview window raising */
+void raise_preview_window(AppContext *ctx, Window win, Window overlay_window);
+
 #endif /* ALTTAB_WINDOWS_H */
