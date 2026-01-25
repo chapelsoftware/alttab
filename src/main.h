@@ -1,0 +1,110 @@
+/*
+ * alttab - Alt+Tab window switcher
+ * main.h - Common includes and forward declarations
+ */
+
+#ifndef ALTTAB_MAIN_H
+#define ALTTAB_MAIN_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#include <X11/Xutil.h>
+#include <X11/extensions/Xcomposite.h>
+#include <X11/extensions/Xrender.h>
+#include <cairo/cairo.h>
+#include <cairo/cairo-xlib.h>
+
+/* Forward declarations */
+typedef struct AppContext AppContext;
+typedef struct EwmhAtoms EwmhAtoms;
+typedef struct WindowInfo WindowInfo;
+typedef struct WindowList WindowList;
+
+/* Application context - global state */
+struct AppContext {
+    Display *display;
+    Window root;
+    int screen;
+    EwmhAtoms *atoms;
+    WindowList *windows;
+    int selected_index;
+    bool switcher_active;
+};
+
+/* EWMH atoms */
+struct EwmhAtoms {
+    Atom net_client_list;
+    Atom net_client_list_stacking;
+    Atom net_current_desktop;
+    Atom net_wm_desktop;
+    Atom net_wm_name;
+    Atom net_wm_icon;
+    Atom net_wm_state;
+    Atom net_wm_state_hidden;
+    Atom net_wm_window_type;
+    Atom net_wm_window_type_normal;
+    Atom net_wm_window_type_dialog;
+    Atom net_active_window;
+    Atom utf8_string;
+    Atom wm_name;
+};
+
+/* Window information */
+struct WindowInfo {
+    Window window;
+    char *name;
+    int desktop;
+    bool hidden;
+    cairo_surface_t *icon;
+    cairo_surface_t *thumbnail;
+};
+
+/* Window list */
+struct WindowList {
+    WindowInfo *windows;
+    int count;
+    int capacity;
+};
+
+/* Module function prototypes */
+
+/* ewmh.c */
+void ewmh_init_atoms(AppContext *ctx);
+Window *ewmh_get_client_list(AppContext *ctx, int *count);
+int ewmh_get_current_desktop(AppContext *ctx);
+int ewmh_get_window_desktop(AppContext *ctx, Window win);
+char *ewmh_get_window_name(AppContext *ctx, Window win);
+bool ewmh_is_window_hidden(AppContext *ctx, Window win);
+void ewmh_activate_window(AppContext *ctx, Window win);
+
+/* hotkey.c */
+bool hotkey_grab(AppContext *ctx);
+void hotkey_ungrab(AppContext *ctx);
+bool hotkey_alt_released(AppContext *ctx);
+
+/* overlay.c */
+bool overlay_create(AppContext *ctx);
+void overlay_destroy(AppContext *ctx);
+void overlay_show(AppContext *ctx);
+void overlay_hide(AppContext *ctx);
+void overlay_draw(AppContext *ctx);
+
+/* thumbnail.c */
+cairo_surface_t *thumbnail_capture(AppContext *ctx, Window win, int width, int height);
+void thumbnail_free(cairo_surface_t *surface);
+
+/* icon.c */
+cairo_surface_t *icon_get(AppContext *ctx, Window win, int size);
+void icon_free(cairo_surface_t *surface);
+
+/* util.c */
+void log_error(const char *fmt, ...);
+void log_warning(const char *fmt, ...);
+void log_debug(const char *fmt, ...);
+
+#endif /* ALTTAB_MAIN_H */
