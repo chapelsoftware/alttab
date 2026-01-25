@@ -9,7 +9,6 @@ A lightweight Alt+Tab window switcher for X11 with live thumbnails.
 - Window icons from `_NET_WM_ICON`
 - MRU (most-recently-used) window ordering
 - Keyboard navigation (Tab, Shift+Tab, Enter, Escape)
-- Preview: raises selected window while switching
 - Customizable hotkey, colors, and tile sizes
 
 ## Dependencies
@@ -156,10 +155,6 @@ For i3, add to `~/.config/i3/config`:
 ```
 exec --no-startup-id alttab
 ```
-
-For sway (note: alttab is X11-only, won't work on Wayland):
-
-N/A - Use sway's built-in switcher instead.
 
 For Openbox, add to `~/.config/openbox/autostart`:
 
