@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "main.h"
+#include "util.h"
 
 /*
  * _NET_WM_ICON format:
@@ -229,17 +230,21 @@ static cairo_surface_t *icon_scale_surface(cairo_surface_t *source, int target_s
 /*
  * Get window icon from _NET_WM_ICON property.
  * Returns Cairo surface at the requested size, or NULL if no icon.
+ * Handles window destruction gracefully.
  */
 cairo_surface_t *icon_get(AppContext *ctx, Window win, int size)
 {
-    if (!ctx || win == None || size <= 0)
+    if (!ctx || !ctx->display || win == None || size <= 0)
         return NULL;
 
-    /* Read _NET_WM_ICON property */
+    /* Read _NET_WM_ICON property with error handling */
     Atom actual_type;
     int actual_format;
     unsigned long nitems, bytes_after;
     unsigned char *data = NULL;
+
+    /* Clear error state before X call */
+    xerror_clear();
 
     int status = XGetWindowProperty(ctx->display, win,
                                     ctx->atoms->net_wm_icon,
@@ -247,6 +252,15 @@ cairo_surface_t *icon_get(AppContext *ctx, Window win, int size)
                                     False, XA_CARDINAL,
                                     &actual_type, &actual_format,
                                     &nitems, &bytes_after, &data);
+
+    /* Sync and check for X errors */
+    XSync(ctx->display, False);
+    if (xerror_check()) {
+        log_debug("X error getting icon for window 0x%lx", win);
+        if (data)
+            XFree(data);
+        return NULL;
+    }
 
     if (status != Success || actual_type == None || actual_format != 32 || !data) {
         if (data)

@@ -10,6 +10,7 @@
 #include "main.h"
 #include "overlay.h"
 #include "layout.h"
+#include "util.h"
 
 /* Default overlay dimensions */
 #define OVERLAY_WIDTH  600
@@ -52,9 +53,26 @@
 /* Static overlay state */
 static OverlayState overlay_state;
 
+/* Track whether we have true transparency (ARGB visual with compositor) */
+static bool overlay_has_transparency = false;
+
 OverlayState *overlay_get_state(void)
 {
     return &overlay_state;
+}
+
+/*
+ * Check if a compositor is running by looking for _NET_WM_CM_Sn atom.
+ */
+static bool compositor_running(AppContext *ctx)
+{
+    char atom_name[32];
+    snprintf(atom_name, sizeof(atom_name), "_NET_WM_CM_S%d", ctx->screen);
+
+    Atom cm_atom = XInternAtom(ctx->display, atom_name, False);
+    Window cm_owner = XGetSelectionOwner(ctx->display, cm_atom);
+
+    return (cm_owner != None);
 }
 
 /*
@@ -129,20 +147,40 @@ bool overlay_create(AppContext *ctx)
 {
     OverlayState *state = &overlay_state;
     memset(state, 0, sizeof(*state));
+    overlay_has_transparency = false;
 
-    /* Find 32-bit ARGB visual */
-    state->visual = find_argb_visual(ctx->display, ctx->screen, &state->depth);
-    if (!state->visual) {
-        log_error("Could not find 32-bit ARGB visual");
-        return false;
+    /* Check for compositor and 32-bit ARGB visual */
+    bool have_compositor = compositor_running(ctx);
+    if (have_compositor) {
+        log_info("Compositor detected, attempting transparent overlay");
+    } else {
+        log_warning("No compositor running - using opaque overlay (thumbnails may not work)");
     }
 
-    /* Create colormap for ARGB visual */
-    state->colormap = XCreateColormap(ctx->display, ctx->root,
-                                       state->visual, AllocNone);
-    if (!state->colormap) {
-        log_error("Could not create colormap");
-        return false;
+    /* Try to find 32-bit ARGB visual for transparency */
+    state->visual = find_argb_visual(ctx->display, ctx->screen, &state->depth);
+
+    if (state->visual && have_compositor) {
+        /* We have ARGB visual and compositor - use transparency */
+        overlay_has_transparency = true;
+
+        /* Create colormap for ARGB visual */
+        state->colormap = XCreateColormap(ctx->display, ctx->root,
+                                           state->visual, AllocNone);
+        if (!state->colormap) {
+            log_warning("Could not create ARGB colormap, falling back to opaque");
+            overlay_has_transparency = false;
+            state->visual = NULL;
+        }
+    }
+
+    /* Fallback: use default visual (opaque window) */
+    if (!state->visual || !overlay_has_transparency) {
+        log_info("Using default visual (opaque mode)");
+        state->visual = DefaultVisual(ctx->display, ctx->screen);
+        state->depth = DefaultDepth(ctx->display, ctx->screen);
+        state->colormap = DefaultColormap(ctx->display, ctx->screen);
+        overlay_has_transparency = false;
     }
 
     /* Get screen dimensions for centering */
@@ -155,15 +193,30 @@ bool overlay_create(AppContext *ctx)
     int x = (screen_width - state->width) / 2;
     int y = (screen_height - state->height) / 2;
 
-    /* Window attributes for transparent, override-redirect window */
+    /* Window attributes - override-redirect for popup behavior */
     XSetWindowAttributes attrs;
     attrs.override_redirect = True;      /* No window decorations */
     attrs.colormap = state->colormap;
     attrs.border_pixel = 0;
-    attrs.background_pixel = 0;          /* Transparent background */
 
-    unsigned long attr_mask = CWOverrideRedirect | CWColormap |
-                               CWBorderPixel | CWBackPixel;
+    unsigned long attr_mask = CWOverrideRedirect | CWColormap | CWBorderPixel;
+
+    if (overlay_has_transparency) {
+        attrs.background_pixel = 0;      /* Transparent background */
+        attr_mask |= CWBackPixel;
+    } else {
+        /* Opaque mode: set a dark background color */
+        XColor bg_color;
+        bg_color.red = (unsigned short)(OVERLAY_BG_R * 65535);
+        bg_color.green = (unsigned short)(OVERLAY_BG_G * 65535);
+        bg_color.blue = (unsigned short)(OVERLAY_BG_B * 65535);
+        bg_color.flags = DoRed | DoGreen | DoBlue;
+
+        if (XAllocColor(ctx->display, state->colormap, &bg_color)) {
+            attrs.background_pixel = bg_color.pixel;
+            attr_mask |= CWBackPixel;
+        }
+    }
 
     /* Create the window */
     state->window = XCreateWindow(ctx->display, ctx->root,
@@ -176,7 +229,9 @@ bool overlay_create(AppContext *ctx)
 
     if (!state->window) {
         log_error("Could not create overlay window");
-        XFreeColormap(ctx->display, state->colormap);
+        if (overlay_has_transparency && state->colormap != DefaultColormap(ctx->display, ctx->screen)) {
+            XFreeColormap(ctx->display, state->colormap);
+        }
         return false;
     }
 
@@ -194,7 +249,9 @@ bool overlay_create(AppContext *ctx)
     if (cairo_surface_status(state->surface) != CAIRO_STATUS_SUCCESS) {
         log_error("Could not create Cairo surface");
         XDestroyWindow(ctx->display, state->window);
-        XFreeColormap(ctx->display, state->colormap);
+        if (overlay_has_transparency && state->colormap != DefaultColormap(ctx->display, ctx->screen)) {
+            XFreeColormap(ctx->display, state->colormap);
+        }
         return false;
     }
 
@@ -204,12 +261,16 @@ bool overlay_create(AppContext *ctx)
         log_error("Could not create Cairo context");
         cairo_surface_destroy(state->surface);
         XDestroyWindow(ctx->display, state->window);
-        XFreeColormap(ctx->display, state->colormap);
+        if (overlay_has_transparency && state->colormap != DefaultColormap(ctx->display, ctx->screen)) {
+            XFreeColormap(ctx->display, state->colormap);
+        }
         return false;
     }
 
     state->visible = false;
-    log_debug("Overlay window created: 0x%lx (depth=%d)", state->window, state->depth);
+    log_debug("Overlay window created: 0x%lx (depth=%d, %s)",
+              state->window, state->depth,
+              overlay_has_transparency ? "transparent" : "opaque");
 
     return true;
 }
@@ -233,12 +294,15 @@ void overlay_destroy(AppContext *ctx)
         state->window = None;
     }
 
-    if (state->colormap) {
+    /* Only free colormap if we allocated it (transparency mode) */
+    if (overlay_has_transparency && state->colormap &&
+        state->colormap != DefaultColormap(ctx->display, ctx->screen)) {
         XFreeColormap(ctx->display, state->colormap);
-        state->colormap = None;
     }
+    state->colormap = None;
 
     state->visible = false;
+    overlay_has_transparency = false;
     log_debug("Overlay window destroyed");
 }
 
@@ -342,7 +406,8 @@ static char *truncate_text(cairo_t *cr, const char *text, double max_width)
 }
 
 /*
- * Clear the overlay to transparent, then fill with semi-transparent background.
+ * Clear the overlay to transparent (or opaque background if no compositor),
+ * then fill with semi-transparent background.
  */
 void overlay_clear(AppContext *ctx)
 {
@@ -352,19 +417,32 @@ void overlay_clear(AppContext *ctx)
     if (!state->cr)
         return;
 
-    /* Clear to fully transparent first */
-    cairo_save(state->cr);
-    cairo_set_operator(state->cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(state->cr, 0, 0, 0, 0);
-    cairo_paint(state->cr);
-    cairo_restore(state->cr);
+    if (overlay_has_transparency) {
+        /* Clear to fully transparent first */
+        cairo_save(state->cr);
+        cairo_set_operator(state->cr, CAIRO_OPERATOR_SOURCE);
+        cairo_set_source_rgba(state->cr, 0, 0, 0, 0);
+        cairo_paint(state->cr);
+        cairo_restore(state->cr);
 
-    /* Draw semi-transparent background with rounded corners */
-    cairo_set_source_rgba(state->cr, OVERLAY_BG_R, OVERLAY_BG_G,
-                          OVERLAY_BG_B, OVERLAY_BG_A);
-    draw_rounded_rect(state->cr, 0, 0, state->width, state->height,
-                      TILE_CORNER_RADIUS * 2);
-    cairo_fill(state->cr);
+        /* Draw semi-transparent background with rounded corners */
+        cairo_set_source_rgba(state->cr, OVERLAY_BG_R, OVERLAY_BG_G,
+                              OVERLAY_BG_B, OVERLAY_BG_A);
+        draw_rounded_rect(state->cr, 0, 0, state->width, state->height,
+                          TILE_CORNER_RADIUS * 2);
+        cairo_fill(state->cr);
+    } else {
+        /* Opaque mode: fill entire background with solid dark color */
+        cairo_set_source_rgb(state->cr, OVERLAY_BG_R, OVERLAY_BG_G, OVERLAY_BG_B);
+        cairo_paint(state->cr);
+
+        /* Draw subtle rounded rectangle border for visual separation */
+        cairo_set_source_rgb(state->cr, 0.3, 0.3, 0.3);
+        cairo_set_line_width(state->cr, 2.0);
+        draw_rounded_rect(state->cr, 1, 1, state->width - 2, state->height - 2,
+                          TILE_CORNER_RADIUS * 2);
+        cairo_stroke(state->cr);
+    }
 }
 
 /* Icon rendering constants */

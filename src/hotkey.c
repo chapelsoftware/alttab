@@ -4,6 +4,7 @@
  */
 
 #include "main.h"
+#include "util.h"
 #include <X11/keysym.h>
 
 /* Lock key modifier masks */

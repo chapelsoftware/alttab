@@ -8,6 +8,7 @@
 #include "main.h"
 #include "windows.h"
 #include "layout.h"
+#include "util.h"
 #include <X11/Xatom.h>
 
 /* Thumbnail capture parameters - must match overlay.c constants */
@@ -118,14 +119,18 @@ static bool windows_get_geometry(AppContext *ctx, Window win, WindowInfo *info)
     int x, y;
     unsigned int width, height, border_width, depth;
 
-    /* Set error handler to catch BadWindow errors */
-    XSync(ctx->display, False);
+    /* Clear error state and try to get geometry */
+    xerror_clear();
 
     int status = XGetGeometry(ctx->display, win, &root_return,
                               &x, &y, &width, &height,
                               &border_width, &depth);
 
-    if (!status) {
+    /* Sync and check for X errors (e.g., BadWindow if destroyed) */
+    XSync(ctx->display, False);
+
+    if (!status || xerror_check()) {
+        log_debug("Failed to get geometry for window 0x%lx", win);
         return false;
     }
 
@@ -618,6 +623,7 @@ StackingOrder *stacking_save(AppContext *ctx)
 /*
  * Restore a previously saved stacking order.
  * Re-stacks windows from bottom to top using XRestackWindows.
+ * Handles destroyed windows gracefully by skipping them.
  */
 void stacking_restore(AppContext *ctx, StackingOrder *order)
 {
@@ -636,9 +642,14 @@ void stacking_restore(AppContext *ctx, StackingOrder *order)
         reversed[i] = order->windows[order->count - 1 - i];
     }
 
-    /* Restack all windows */
+    /* Restack all windows - ignore errors from destroyed windows */
+    xerror_clear();
     XRestackWindows(ctx->display, reversed, order->count);
     XFlush(ctx->display);
+
+    if (xerror_check()) {
+        log_debug("Some windows may have been destroyed during stacking restore");
+    }
 
     free(reversed);
     log_debug("Restored stacking order: %d windows", order->count);
@@ -662,14 +673,22 @@ void stacking_free(StackingOrder *order)
  * Raise a window for preview, keeping the overlay above it.
  * This temporarily brings the selected window to the top of the stack,
  * then re-raises the overlay to stay above it.
+ * Handles destroyed windows gracefully.
  */
 void raise_preview_window(AppContext *ctx, Window win, Window overlay_window)
 {
     if (!ctx || win == None)
         return;
 
-    /* Raise the selected window */
+    /* Raise the selected window - ignore errors if window was destroyed */
+    xerror_clear();
     XRaiseWindow(ctx->display, win);
+    XSync(ctx->display, False);
+
+    if (xerror_check()) {
+        log_debug("Failed to raise preview window 0x%lx (may be destroyed)", win);
+        /* Still try to raise overlay even if preview window failed */
+    }
 
     /* Re-raise the overlay window to keep it on top */
     if (overlay_window != None) {

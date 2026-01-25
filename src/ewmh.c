@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "main.h"
+#include "util.h"
 
 static EwmhAtoms atoms_storage;
 
@@ -35,9 +36,15 @@ void ewmh_init_atoms(AppContext *ctx)
 }
 
 /*
- * Generic property getter with error handling.
+ * Generic property getter with comprehensive error handling.
  * Returns property data on success (caller must XFree), NULL on failure.
  * Sets *nitems to the number of items returned.
+ *
+ * Handles:
+ * - BadWindow errors (window destroyed while reading)
+ * - BadAtom errors (invalid property)
+ * - Type mismatches
+ * - Empty properties
  */
 static unsigned char *ewmh_get_window_property(AppContext *ctx, Window win,
                                                 Atom property, Atom req_type,
@@ -50,12 +57,68 @@ static unsigned char *ewmh_get_window_property(AppContext *ctx, Window win,
 
     *nitems = 0;
 
+    /* Validate input parameters */
+    if (!ctx || !ctx->display || win == None || property == None) {
+        return NULL;
+    }
+
+    /* Clear error state before X call */
+    xerror_clear();
+
     int status = XGetWindowProperty(ctx->display, win, property,
                                     0, ~0L, False, req_type,
                                     &actual_type, &actual_format,
                                     nitems, &bytes_after, &data);
 
-    if (status != Success || actual_type == None) {
+    /* Sync and check for X errors (e.g., BadWindow if window was destroyed) */
+    XSync(ctx->display, False);
+    if (xerror_check()) {
+        log_debug("X error getting property for window 0x%lx: %s",
+                  win, xerror_get_text());
+        if (data)
+            XFree(data);
+        *nitems = 0;
+        return NULL;
+    }
+
+    /* Check XGetWindowProperty result */
+    if (status != Success) {
+        log_debug("XGetWindowProperty failed for window 0x%lx", win);
+        if (data)
+            XFree(data);
+        *nitems = 0;
+        return NULL;
+    }
+
+    /* Property doesn't exist or type mismatch */
+    if (actual_type == None) {
+        if (data)
+            XFree(data);
+        *nitems = 0;
+        return NULL;
+    }
+
+    /* Validate we got the expected type if one was specified */
+    if (req_type != AnyPropertyType && actual_type != req_type) {
+        log_debug("Property type mismatch: expected %ld, got %ld",
+                  (long)req_type, (long)actual_type);
+        if (data)
+            XFree(data);
+        *nitems = 0;
+        return NULL;
+    }
+
+    /* Validate format */
+    if (actual_format != 8 && actual_format != 16 && actual_format != 32) {
+        log_debug("Invalid property format: %d", actual_format);
+        if (data)
+            XFree(data);
+        *nitems = 0;
+        return NULL;
+    }
+
+    /* Validate data pointer */
+    if (!data || *nitems == 0) {
         if (data)
             XFree(data);
         *nitems = 0;
@@ -147,11 +210,16 @@ char *ewmh_get_window_name(AppContext *ctx, Window win)
     unsigned char *data;
     char *name = NULL;
 
+    /* Validate window */
+    if (win == None)
+        return NULL;
+
     /* Try _NET_WM_NAME (UTF-8) first */
     data = ewmh_get_window_property(ctx, win, ctx->atoms->net_wm_name,
                                     ctx->atoms->utf8_string, &nitems);
     if (data && nitems > 0) {
-        name = strdup((char *)data);
+        /* Ensure null termination for safety */
+        name = strndup((char *)data, nitems);
         XFree(data);
         return name;
     }
@@ -163,7 +231,7 @@ char *ewmh_get_window_name(AppContext *ctx, Window win)
     data = ewmh_get_window_property(ctx, win, ctx->atoms->wm_name,
                                     XA_STRING, &nitems);
     if (data && nitems > 0) {
-        name = strdup((char *)data);
+        name = strndup((char *)data, nitems);
         XFree(data);
         return name;
     }
@@ -171,13 +239,15 @@ char *ewmh_get_window_name(AppContext *ctx, Window win)
     if (data)
         XFree(data);
 
-    /* Try XFetchName as last resort */
+    /* Try XFetchName as last resort - with error handling */
     char *xname = NULL;
+    xerror_clear();
     if (XFetchName(ctx->display, win, &xname) && xname) {
         name = strdup(xname);
         XFree(xname);
         return name;
     }
+    /* Ignore any errors from XFetchName on destroyed windows */
 
     return NULL;
 }
@@ -231,6 +301,10 @@ bool ewmh_is_window_hidden(AppContext *ctx, Window win)
 
 void ewmh_activate_window(AppContext *ctx, Window win)
 {
+    /* Validate window before trying to activate */
+    if (!ctx || !ctx->display || win == None)
+        return;
+
     XEvent ev;
 
     memset(&ev, 0, sizeof(ev));
@@ -242,9 +316,15 @@ void ewmh_activate_window(AppContext *ctx, Window win)
     ev.xclient.data.l[1] = CurrentTime;
     ev.xclient.data.l[2] = 0;  /* Currently active window (0 = none) */
 
+    xerror_clear();
     XSendEvent(ctx->display, ctx->root, False,
                SubstructureNotifyMask | SubstructureRedirectMask, &ev);
     XFlush(ctx->display);
+
+    /* Check if activation failed (window may have been destroyed) */
+    if (xerror_check()) {
+        log_debug("Failed to activate window 0x%lx: %s", win, xerror_get_text());
+    }
 }
 
 /*

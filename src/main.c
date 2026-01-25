@@ -5,9 +5,11 @@
 
 #include "main.h"
 #include "overlay.h"
+#include "util.h"
 #include <X11/keysym.h>
 #include <poll.h>
 #include <unistd.h>
+#include <signal.h>
 
 /* Application state machine */
 typedef enum {
@@ -17,6 +19,9 @@ typedef enum {
 
 /* Polling interval for Alt key release (milliseconds) */
 #define ALT_POLL_INTERVAL_MS 10
+
+/* Global flag for clean shutdown on signals or display disconnect */
+static volatile sig_atomic_t g_running = 1;
 
 /* Forward declarations */
 static void start_switching(AppContext *ctx, Window *original_window,
@@ -28,6 +33,98 @@ static void select_previous(AppContext *ctx);
 static void raise_current_selection(AppContext *ctx);
 static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
                             Window *original_window, StackingOrder **saved_stacking);
+static bool validate_window_exists(AppContext *ctx, Window win);
+
+/*
+ * Signal handler for clean shutdown.
+ */
+static void signal_handler(int sig)
+{
+    (void)sig;
+    g_running = 0;
+}
+
+/*
+ * Display disconnect callback - called when X connection is lost.
+ */
+static void on_display_disconnect(void *user_data)
+{
+    (void)user_data;
+    log_error("Display connection lost - shutting down");
+    g_running = 0;
+}
+
+/*
+ * Check if a window still exists (hasn't been destroyed).
+ * Returns true if window is valid.
+ */
+static bool validate_window_exists(AppContext *ctx, Window win)
+{
+    if (win == None)
+        return false;
+
+    XWindowAttributes attrs;
+    xerror_clear();
+    Status status = XGetWindowAttributes(ctx->display, win, &attrs);
+    XSync(ctx->display, False);
+
+    return (status != 0 && xerror_check() == 0);
+}
+
+/*
+ * Remove a window from the current window list by its Window ID.
+ * Adjusts selected_index if needed.
+ */
+static void remove_window_from_list(AppContext *ctx, Window win)
+{
+    if (!ctx->windows || ctx->windows->count == 0)
+        return;
+
+    /* Find the window in the list */
+    int found_index = -1;
+    for (int i = 0; i < ctx->windows->count; i++) {
+        if (ctx->windows->windows[i].window == win) {
+            found_index = i;
+            break;
+        }
+    }
+
+    if (found_index < 0)
+        return;
+
+    log_debug("Removing destroyed window 0x%lx from list (index %d)", win, found_index);
+
+    /* Free resources for this window */
+    WindowInfo *info = &ctx->windows->windows[found_index];
+    if (info->name) {
+        free(info->name);
+        info->name = NULL;
+    }
+    if (info->icon) {
+        cairo_surface_destroy(info->icon);
+        info->icon = NULL;
+    }
+    if (info->thumbnail) {
+        cairo_surface_destroy(info->thumbnail);
+        info->thumbnail = NULL;
+    }
+
+    /* Shift remaining windows down */
+    for (int i = found_index; i < ctx->windows->count - 1; i++) {
+        ctx->windows->windows[i] = ctx->windows->windows[i + 1];
+    }
+    ctx->windows->count--;
+
+    /* Adjust selected index */
+    if (ctx->selected_index >= ctx->windows->count) {
+        ctx->selected_index = ctx->windows->count - 1;
+        if (ctx->selected_index < 0)
+            ctx->selected_index = 0;
+    } else if (ctx->selected_index > found_index) {
+        ctx->selected_index--;
+    }
+}
+
 
 /*
  * Start the window switching mode.
@@ -223,14 +320,33 @@ static void handle_keypress(AppContext *ctx, XKeyEvent *ev, AppState *state,
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
-
     AppContext ctx = {0};
     AppState state = STATE_IDLE;
     Window original_window = None;
     StackingOrder *saved_stacking = NULL;
-    bool running = true;
+
+    /* Parse command line arguments */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            log_set_level(LOG_LEVEL_INFO);
+        } else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
+            log_set_level(LOG_LEVEL_DEBUG);
+        } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+            log_set_level(LOG_LEVEL_ERROR);
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printf("Usage: %s [options]\n", argv[0]);
+            printf("Options:\n");
+            printf("  -v, --verbose  Show info messages\n");
+            printf("  -d, --debug    Show debug messages\n");
+            printf("  -q, --quiet    Show only errors\n");
+            printf("  -h, --help     Show this help\n");
+            return 0;
+        }
+    }
+
+    /* Install signal handlers for clean shutdown */
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     /* Open X display */
     ctx.display = XOpenDisplay(NULL);
@@ -239,8 +355,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Install error handlers before any other X operations */
+    xerror_install_handler(ctx.display);
+    xioerror_install_handler(ctx.display);
+    set_display_disconnect_callback(on_display_disconnect, &ctx);
+
     ctx.screen = DefaultScreen(ctx.display);
     ctx.root = RootWindow(ctx.display, ctx.screen);
+
+    log_info("Connected to X display, screen %d", ctx.screen);
 
     /* Initialize EWMH atoms */
     ewmh_init_atoms(&ctx);
@@ -260,16 +383,18 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Select PropertyNotify on root for _NET_ACTIVE_WINDOW changes */
-    XSelectInput(ctx.display, ctx.root, PropertyChangeMask);
+    /* Select PropertyNotify on root for _NET_ACTIVE_WINDOW changes,
+     * and SubstructureNotify for window create/destroy events */
+    XSelectInput(ctx.display, ctx.root,
+                 PropertyChangeMask | SubstructureNotifyMask);
 
     /* Get X connection file descriptor for poll() */
     int x_fd = ConnectionNumber(ctx.display);
 
-    log_debug("Entering main event loop");
+    log_info("Entering main event loop");
 
     /* Main event loop */
-    while (running) {
+    while (g_running) {
         if (state == STATE_SWITCHING) {
             /* When switching, poll for Alt release and X events */
             struct pollfd pfd = {
@@ -296,6 +421,44 @@ int main(int argc, char *argv[])
                     }
                     break;
 
+                case DestroyNotify:
+                    /* A window was destroyed - remove from list if present */
+                    if (ctx.switcher_active && ctx.windows) {
+                        Window destroyed = ev.xdestroywindow.window;
+                        log_debug("Window 0x%lx destroyed during switching", destroyed);
+                        remove_window_from_list(&ctx, destroyed);
+
+                        if (ctx.windows->count == 0) {
+                            /* No windows left */
+                            log_debug("No windows left after destruction");
+                            stop_switching(&ctx, false, original_window, &saved_stacking);
+                            state = STATE_IDLE;
+                        } else {
+                            redraw_overlay(&ctx);
+                            raise_current_selection(&ctx);
+                        }
+                    }
+                    break;
+
+                case UnmapNotify:
+                    /* Window was unmapped (closed/minimized) - check if it's in our list */
+                    if (ctx.switcher_active && ctx.windows) {
+                        /* Some WMs send UnmapNotify before DestroyNotify */
+                        Window unmapped = ev.xunmap.window;
+                        if (!validate_window_exists(&ctx, unmapped)) {
+                            log_debug("Window 0x%lx unmapped and invalid", unmapped);
+                            remove_window_from_list(&ctx, unmapped);
+                            if (ctx.windows->count == 0) {
+                                stop_switching(&ctx, false, original_window, &saved_stacking);
+                                state = STATE_IDLE;
+                            } else {
+                                redraw_overlay(&ctx);
+                                raise_current_selection(&ctx);
+                            }
+                        }
+                    }
+                    break;
+
                 default:
                     break;
                 }
@@ -308,8 +471,9 @@ int main(int argc, char *argv[])
             /* Poll with timeout to check for Alt release */
             int ret = poll(&pfd, 1, ALT_POLL_INTERVAL_MS);
             if (ret < 0) {
-                log_error("poll() failed");
-                running = false;
+                if (g_running) {
+                    log_error("poll() failed");
+                }
                 break;
             }
 
@@ -320,7 +484,24 @@ int main(int argc, char *argv[])
                 state = STATE_IDLE;
             }
         } else {
-            /* In idle state, block on X events */
+            /* In idle state, block on X events with timeout to check for signals */
+            struct pollfd pfd = {
+                .fd = x_fd,
+                .events = POLLIN,
+                .revents = 0
+            };
+
+            int ret = poll(&pfd, 1, 100); /* 100ms timeout to check signals */
+            if (ret < 0) {
+                if (g_running) {
+                    log_error("poll() failed");
+                }
+                break;
+            }
+
+            if (ret == 0 || !(pfd.revents & POLLIN))
+                continue;
+
             XEvent ev;
             XNextEvent(ctx.display, &ev);
 
@@ -340,6 +521,8 @@ int main(int argc, char *argv[])
         }
     }
 
+    log_info("Shutting down");
+
     /* Clean shutdown */
     if (saved_stacking) {
         stacking_free(saved_stacking);
@@ -351,7 +534,12 @@ int main(int argc, char *argv[])
     }
     overlay_destroy(&ctx);
     hotkey_ungrab(&ctx);
-    XCloseDisplay(ctx.display);
 
+    /* Only close display if it's still valid */
+    if (display_is_valid(ctx.display)) {
+        XCloseDisplay(ctx.display);
+    }
+
+    log_info("Clean shutdown complete");
     return 0;
 }
