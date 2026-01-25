@@ -24,4 +24,17 @@ typedef struct OverlayState {
 /* Get the overlay state (initialized by overlay_create) */
 OverlayState *overlay_get_state(void);
 
+/* Clear overlay with semi-transparent background */
+void overlay_clear(AppContext *ctx);
+
+/* Draw a single tile at the specified position */
+void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
+                       const char *title, bool selected);
+
+/* Flush Cairo surface and X display */
+void overlay_flush(AppContext *ctx);
+
+/* Clear and redraw all tiles */
+void redraw_overlay(AppContext *ctx);
+
 #endif /* ALTTAB_OVERLAY_H */

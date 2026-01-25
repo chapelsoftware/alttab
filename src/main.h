@@ -103,6 +103,11 @@ void overlay_destroy(AppContext *ctx);
 void overlay_show(AppContext *ctx);
 void overlay_hide(AppContext *ctx);
 void overlay_draw(AppContext *ctx);
+void overlay_clear(AppContext *ctx);
+void overlay_draw_tile(AppContext *ctx, int x, int y, int width, int height,
+                       const char *title, bool selected);
+void overlay_flush(AppContext *ctx);
+void redraw_overlay(AppContext *ctx);
 
 /* thumbnail.c */
 cairo_surface_t *thumbnail_capture(AppContext *ctx, Window win, int width, int height);
